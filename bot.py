@@ -41,8 +41,7 @@ def main_keyboard():
     return ReplyKeyboardMarkup(
         [[KeyboardButton(BTN_GOALS), KeyboardButton(BTN_REPORT)],
          [KeyboardButton(BTN_STATS), KeyboardButton(BTN_WEAK)]],
-        resize_keyboard=True,
-        persistent=True
+        resize_keyboard=True
     )
 
 
