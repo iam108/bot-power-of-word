@@ -16,7 +16,8 @@ from telegram.ext import (
 from db import (
     init_db, register_user, get_user, get_all_users,
     save_goal, mark_done, get_goals, get_user_stats,
-    get_weak_categories, CATEGORIES
+    get_weak_categories, CATEGORIES,
+    mark_pushups, get_pushups
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -55,8 +56,6 @@ def cat_label(key: str) -> str:
     return dict(CATEGORIES)[key]
 
 
-# ─── Setup bot commands ───────────────────────────────────────────────────────
-
 async def post_init(app: Application):
     await app.bot.set_my_commands([
         BotCommand("start",  "🚀 Старт / главное меню"),
@@ -81,9 +80,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "👋 Привет! Это трекер *40-дневного вызова*.\n\n"
-        "Каждое утро ты ставишь 5 целей — по одной на каждую сферу жизни.\n"
-        "Вечером отмечаешь что выполнено. Всё автоматически уходит в группу.\n\n"
-        "Как тебя зовут? Имя будет видно в постах группы.",
+        "Каждое утро ставишь 5 целей по сферам жизни.\n"
+        "Вечером отмечаешь что выполнено — всё уходит в группу.\n\n"
+        "Как тебя зовут? Имя будет видно в постах.",
         parse_mode="Markdown"
     )
     return ASK_NAME
@@ -92,23 +91,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def got_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
     if not name or len(name) > 50:
-        await update.message.reply_text("Введи имя (не длиннее 50 символов):")
+        await update.message.reply_text("Введи имя (до 50 символов):")
         return ASK_NAME
-
     register_user(update.effective_user.id, name)
     await update.message.reply_text(
         f"✅ Отлично, *{name}*! Ты в игре 🚀\n\n"
         f"Напоминания:\n"
         f"  🌅 08:00 — поставить цели\n"
         f"  🌙 20:00 — вечерний отчёт\n\n"
-        f"Или используй кнопки ниже в любой момент 👇",
+        f"Используй кнопки ниже 👇",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
     return ConversationHandler.END
 
 
-# ─── Goals collection ─────────────────────────────────────────────────────────
+# ─── Goals ────────────────────────────────────────────────────────────────────
 
 async def start_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(update.effective_user.id)
@@ -123,7 +121,6 @@ async def start_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key, label = CATEGORIES[0]
     await update.message.reply_text(
         f"📋 *День {day}/40 — цели на сегодня*\n\n"
-        f"Буду спрашивать по одной сфере.\n\n"
         f"1️⃣  {label}\n\nНапиши цель:",
         parse_mode="Markdown"
     )
@@ -133,7 +130,6 @@ async def start_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def collect_step(update: Update, context: ContextTypes.DEFAULT_TYPE, step: int):
     text = update.message.text.strip()
     key, label = CATEGORIES[step - 1]
-
     if not text:
         await update.message.reply_text(f"Напиши цель для {label}:")
         return step
@@ -143,10 +139,7 @@ async def collect_step(update: Update, context: ContextTypes.DEFAULT_TYPE, step:
     if step < 5:
         nums = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣"]
         nkey, nlabel = CATEGORIES[step]
-        await update.message.reply_text(
-            f"{nums[step]}  {nlabel}\n\nНапиши цель:",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"{nums[step]}  {nlabel}\n\nНапиши цель:", parse_mode="Markdown")
         return step + 1
     else:
         return await finish_goals(update, context)
@@ -163,17 +156,16 @@ async def finish_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     post = build_morning_post(user[1], day, goals)
     await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=post, parse_mode="Markdown")
-
     await update.message.reply_text(
         "✅ *Цели сохранены и отправлены в группу!*\n\n"
-        "Вечером нажми *🌙 Вечерний отчёт* чтобы отметить выполненное.",
+        "Вечером нажми *🌙 Вечерний отчёт*",
         parse_mode="Markdown",
         reply_markup=main_keyboard()
     )
     return ConversationHandler.END
 
 
-def build_morning_post(name: str, day: int, goals: dict) -> str:
+def build_morning_post(name, day, goals):
     lines = [f"🌅 *{name} — День {day}/40*\n"]
     for key, label in CATEGORIES:
         lines.append(f"{label}\n▸ {goals.get(key, '—')}\n")
@@ -201,37 +193,61 @@ async def start_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     goals = get_goals(user_id, day)
     if not goals:
         await update.message.reply_text(
-            "Сначала поставь цели на сегодня 👉 *🌅 Цели на день*",
+            "Сначала поставь цели 👉 *🌅 Цели на день*",
             parse_mode="Markdown",
             reply_markup=main_keyboard()
         )
         return
 
-    kb = build_report_keyboard(user_id, day, goals)
-    await update.message.reply_text(
-        f"🌙 *День {day}/40 — что выполнено?*\n\nНажимай на каждую сферу:",
-        parse_mode="Markdown",
-        reply_markup=kb
-    )
+    pushups = get_pushups(user_id, day)
+    text, kb = build_report_message(user_id, day, goals, pushups)
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
 
 
-def build_report_keyboard(user_id, day, goals):
+def build_report_message(user_id, day, goals, pushups):
+    done_count = sum(1 for k, (t, d) in goals.items() if d)
+    total = len(goals)
+
+    # Progress bar
+    filled = done_count
+    bar = "█" * filled + "░" * (total - filled)
+
+    lines = [
+        f"🌙 *День {day}/40 — вечерний отчёт*",
+        f"`[{bar}]` {done_count}/{total}\n",
+    ]
+
+    # Each category as a row with ✅/❌ button
     rows = []
     for key, label in CATEGORIES:
         if key not in goals:
             continue
         goal_text, done = goals[key]
-        tick = "✅" if done else "☐"
-        short = goal_text[:25] + "…" if len(goal_text) > 25 else goal_text
+        tick = "✅" if done else "❌"
+        short = goal_text[:30] + "…" if len(goal_text) > 30 else goal_text
+        lines.append(f"{tick} *{label}*\n    _{short}_")
+        action = "off" if done else "on"
         rows.append([InlineKeyboardButton(
-            f"{tick} {label}: {short}",
-            callback_data=f"rep|{user_id}|{day}|{key}|{'off' if done else 'on'}"
+            f"{'✅ Выполнено' if done else '❌ Не выполнено'} — {label.split(' ', 1)[1]}",
+            callback_data=f"rep|{user_id}|{day}|{key}|{action}"
         )])
+
+    # Pushups block
+    lines.append("")
+    lines.append(f"💪 *100 отжиманий:* {'✅ Да!' if pushups else '❌ Нет'}")
+    pu_action = "pu_off" if pushups else "pu_on"
+    rows.append([
+        InlineKeyboardButton("✅ Отжался!" if not pushups else "↩️ Убрать",
+                             callback_data=f"pu|{user_id}|{day}|{pu_action}")
+    ])
+
+    # Send button
     rows.append([InlineKeyboardButton(
-        "📤 Отправить отчёт в группу",
+        "📤 Отправить отчёт в группу →",
         callback_data=f"rep_send|{user_id}|{day}"
     )])
-    return InlineKeyboardMarkup(rows)
+
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
 async def report_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -241,38 +257,57 @@ async def report_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if parts[0] == "rep_send":
         user_id, day = int(parts[1]), int(parts[2])
+        if query.from_user.id != user_id:
+            await query.answer("Это не твой отчёт 😉", show_alert=True)
+            return
         user = get_user(user_id)
         goals = get_goals(user_id, day)
-        post = build_evening_post(user[1], day, goals)
+        pushups = get_pushups(user_id, day)
+        post = build_evening_post(user[1], day, goals, pushups)
         await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=post, parse_mode="Markdown")
-        await query.edit_message_text("✅ Отчёт отправлен в группу!")
+        await query.edit_message_text(
+            "✅ *Отчёт отправлен в группу!*\n\nОтличная работа 💪",
+            parse_mode="Markdown"
+        )
         weak = get_weak_categories(user_id)
         if weak:
             await send_weak_msg(context, user_id, weak)
         return
 
+    if parts[0] == "pu":
+        _, uid, day_str, action = parts
+        if query.from_user.id != int(uid):
+            await query.answer("Это не твой отчёт 😉", show_alert=True)
+            return
+        mark_pushups(int(uid), int(day_str), action == "pu_on")
+        goals = get_goals(int(uid), int(day_str))
+        pushups = get_pushups(int(uid), int(day_str))
+        text, kb = build_report_message(int(uid), int(day_str), goals, pushups)
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+        return
+
+    # rep|uid|day|key|action
     _, uid, day_str, key, action = parts
     if query.from_user.id != int(uid):
         await query.answer("Это не твой отчёт 😉", show_alert=True)
         return
-
     mark_done(int(uid), int(day_str), key, action == "on")
     goals = get_goals(int(uid), int(day_str))
-    await query.edit_message_reply_markup(
-        reply_markup=build_report_keyboard(int(uid), int(day_str), goals)
-    )
+    pushups = get_pushups(int(uid), int(day_str))
+    text, kb = build_report_message(int(uid), int(day_str), goals, pushups)
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
 
 
-def build_evening_post(name, day, goals):
+def build_evening_post(name, day, goals, pushups):
+    done_count = sum(1 for k, (t, d) in goals.items() if d)
     lines = [f"🌙 *{name} — День {day}/40 — итог*\n"]
-    done_count = 0
     for key, label in CATEGORIES:
         if key not in goals:
             continue
         text, done = goals[key]
         lines.append(f"{'✅' if done else '❌'} {label}\n▸ {text}\n")
-        if done: done_count += 1
-    lines.append(f"Выполнено: *{done_count}/5*\n#день{day} #вечер")
+    lines.append(f"💪 100 отжиманий: {'✅' if pushups else '❌'}")
+    lines.append(f"\nВыполнено: *{done_count}/5*\n#день{day} #вечер")
     return "\n".join(lines)
 
 
@@ -300,7 +335,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lines = [f"📊 *Статистика — {user[1]}*\n"]
     for day, total, done_c in rows:
-        filled = done_c or 0
+        filled = int(done_c or 0)
         lines.append(f"День {day:>2}  {'🟣'*filled}{'⬜'*(5-filled)}  {filled}/5")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=main_keyboard())
 
@@ -318,8 +353,6 @@ async def cmd_weak(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_weak_msg(context, user_id, weak)
 
 
-# ─── Button text handlers ─────────────────────────────────────────────────────
-
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == BTN_STATS:
@@ -330,7 +363,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_report(update, context)
 
 
-# ─── Scheduled reminders ──────────────────────────────────────────────────────
+# ─── Reminders ────────────────────────────────────────────────────────────────
 
 async def job_morning(context: ContextTypes.DEFAULT_TYPE):
     day = get_day_number()
@@ -339,11 +372,7 @@ async def job_morning(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=(
-                    f"☀️ Доброе утро, *{name}*!\n\n"
-                    f"День *{day}/40* — время поставить цели 💪\n\n"
-                    f"Нажми 👉 *🌅 Цели на день*"
-                ),
+                text=f"☀️ Доброе утро, *{name}*!\n\nДень *{day}/40* — время поставить цели 💪\n\nНажми 👉 *🌅 Цели на день*",
                 parse_mode="Markdown",
                 reply_markup=main_keyboard()
             )
@@ -360,11 +389,7 @@ async def job_evening(context: ContextTypes.DEFAULT_TYPE):
             if not goals: continue
             await context.bot.send_message(
                 chat_id=user_id,
-                text=(
-                    f"🌙 Добрый вечер, *{name}*!\n\n"
-                    f"День *{day}/40* — как прошёл день?\n\n"
-                    f"Нажми 👉 *🌙 Вечерний отчёт*"
-                ),
+                text=f"🌙 Добрый вечер, *{name}*!\n\nДень *{day}/40* — подведём итоги?\n\nНажми 👉 *🌙 Вечерний отчёт*",
                 parse_mode="Markdown",
                 reply_markup=main_keyboard()
             )
@@ -376,12 +401,7 @@ async def job_evening(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     init_db()
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     reg = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
@@ -409,7 +429,7 @@ def main():
     app.add_handler(CommandHandler("report", start_report))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("weak", cmd_weak))
-    app.add_handler(CallbackQueryHandler(report_button, pattern=r"^rep"))
+    app.add_handler(CallbackQueryHandler(report_button, pattern=r"^(rep|pu)"))
     app.add_handler(MessageHandler(
         filters.Regex(f"^({BTN_REPORT}|{BTN_STATS}|{BTN_WEAK})$"),
         handle_buttons
@@ -419,7 +439,7 @@ def main():
     app.job_queue.run_daily(job_morning, time=time(8, 0, tzinfo=tz))
     app.job_queue.run_daily(job_evening, time=time(20, 0, tzinfo=tz))
 
-    logger.info("Bot v3 started")
+    logger.info("Bot v4 started")
     app.run_polling()
 
 
