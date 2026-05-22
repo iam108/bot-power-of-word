@@ -1,4 +1,6 @@
 import os
+import glob
+import random
 import logging
 from datetime import datetime, time, date
 import pytz
@@ -44,6 +46,16 @@ def main_keyboard():
          [KeyboardButton(BTN_STATS), KeyboardButton(BTN_WEAK)]],
         resize_keyboard=True
     )
+
+
+IMAGES_DIR = os.path.join(os.path.dirname(__file__), "images")
+
+def get_random_image() -> str | None:
+    patterns = ["*.jpg", "*.jpeg", "*.png", "*.webp"]
+    files = []
+    for p in patterns:
+        files.extend(glob.glob(os.path.join(IMAGES_DIR, p)))
+    return random.choice(files) if files else None
 
 
 def get_day_number() -> int:
@@ -155,7 +167,20 @@ async def finish_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_goal(user_id, day, key, text)
 
     post = build_morning_post(user[1], day, goals)
-    await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=post, parse_mode="Markdown")
+    image_path = get_random_image()
+
+    if image_path:
+        with open(image_path, "rb") as photo:
+            await context.bot.send_photo(
+                chat_id=GROUP_CHAT_ID,
+                photo=photo,
+                caption=post,
+                parse_mode="Markdown"
+            )
+    else:
+        await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID, text=post, parse_mode="Markdown"
+        )
     await update.message.reply_text(
         "✅ *Цели сохранены и отправлены в группу!*\n\n"
         "Вечером нажми *🌙 Вечерний отчёт*",
@@ -166,10 +191,17 @@ async def finish_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def build_morning_post(name, day, goals):
-    lines = [f"🌅 *{name} — День {day}/40*\n"]
+    lines = [
+        f"🌅 *{name}*  ·  День *{day}* из 40\n",
+        "─────────────────────",
+    ]
     for key, label in CATEGORIES:
-        lines.append(f"{label}\n▸ {goals.get(key, '—')}\n")
-    lines.append(f"#день{day} #утро")
+        emoji = label.split()[0]
+        cat = label.split(" ", 1)[1]
+        text = goals.get(key, "—")
+        lines.append(f"{emoji} *{cat}*\n    {text}")
+    lines.append("─────────────────────")
+    lines.append(f"#день{day} #утро #цена_слова")
     return "\n".join(lines)
 
 
@@ -300,14 +332,26 @@ async def report_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def build_evening_post(name, day, goals, pushups):
     done_count = sum(1 for k, (t, d) in goals.items() if d)
-    lines = [f"🌙 *{name} — День {day}/40 — итог*\n"]
+    total = len(goals)
+    pct = int(done_count / total * 100) if total else 0
+    bar = "█" * done_count + "░" * (total - done_count)
+
+    lines = [
+        f"🌙 *{name}*  ·  День *{day}* из 40\n",
+        f"`[{bar}]`  {done_count}/{total}  ·  {pct}%\n",
+        "─────────────────────",
+    ]
     for key, label in CATEGORIES:
         if key not in goals:
             continue
+        emoji = label.split()[0]
+        cat = label.split(" ", 1)[1]
         text, done = goals[key]
-        lines.append(f"{'✅' if done else '❌'} {label}\n▸ {text}\n")
-    lines.append(f"💪 100 отжиманий: {'✅' if pushups else '❌'}")
-    lines.append(f"\nВыполнено: *{done_count}/5*\n#день{day} #вечер")
+        tick = "✅" if done else "❌"
+        lines.append(f"{tick} *{cat}*\n    {text}")
+    lines.append("─────────────────────")
+    lines.append(f"💪 100 отжиманий — {'✅' if pushups else '❌'}")
+    lines.append(f"\n#день{day} #вечер #цена_слова")
     return "\n".join(lines)
 
 
