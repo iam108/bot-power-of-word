@@ -190,6 +190,12 @@ async def finish_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+def escape_md(text: str) -> str:
+    for ch in ['*', '_', '`', '[']:
+        text = text.replace(ch, '\\' + ch)
+    return text
+
+
 def build_morning_post(name, day, goals):
     lines = [
         f"🌅 *{name}*  ·  День *{day}* из 40\n",
@@ -198,10 +204,10 @@ def build_morning_post(name, day, goals):
     for key, label in CATEGORIES:
         emoji = label.split()[0]
         cat = label.split(" ", 1)[1]
-        text = goals.get(key, "—")
+        text = escape_md(goals.get(key, "—"))
         lines.append(f"{emoji} *{cat}*\n    {text}")
     lines.append("─────────────────────")
-    lines.append(f"#день{day} #утро #цена_слова")
+    lines.append(f"\#день{day} \#утро \#цена\_слова")
     return "\n".join(lines)
 
 
@@ -348,10 +354,10 @@ def build_evening_post(name, day, goals, pushups):
         cat = label.split(" ", 1)[1]
         text, done = goals[key]
         tick = "✅" if done else "❌"
-        lines.append(f"{tick} *{cat}*\n    {text}")
+        lines.append(f"{tick} *{cat}*\n    {escape_md(text)}")
     lines.append("─────────────────────")
     lines.append(f"💪 100 отжиманий — {'✅' if pushups else '❌'}")
-    lines.append(f"\n#день{day} #вечер #цена_слова")
+    lines.append(f"\n\#день{day} \#вечер \#цена\_слова")
     return "\n".join(lines)
 
 
